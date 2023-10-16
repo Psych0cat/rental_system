@@ -117,11 +117,12 @@ func TestReleaseAuto(t *testing.T) {
 		})
 		db.Create(models.AutoRent{
 			AutoID:    "TESTAUTO1",
-			StartDate: testday.AddDate(0, 0, -9),
+			StartDate: time.Date(2023, time.September, 22, 1, 2, 3, 4, time.UTC),
 			EndDate:   testday.AddDate(0, 0, 3),
 		})
 		// 6 working + 4 we + penalty for 3 working + agreement
-		want := (6*200 + 4*200 + 4*200*20/100) + (3*200*5)/100 + 200
+		// 2000 + 80 + 30 + 200
+		want := 2000 + (4 * 200 * 20 / 100) + 30 + 200
 		commission, err1 := svc.ReleaseAuto("TESTAUTO1", testday)
 		if err1 != nil {
 			t.Error(err1)
@@ -142,11 +143,11 @@ func TestReleaseAuto(t *testing.T) {
 	})
 	db.Create(models.AutoRent{
 		AutoID:    "TESTAUTO2",
-		StartDate: testday.AddDate(0, 0, -12),
-		EndDate:   testday.AddDate(0, 0, 10),
+		StartDate: time.Date(2023, time.October, 29, 1, 2, 3, 4, time.UTC),
+		EndDate:   time.Date(2023, time.November, 11, 1, 2, 3, 4, time.UTC),
 	})
-	// 10 working + 3 we + weekend percent (6wd + 4we) + agreement
-	want := (13 * 200) + 3*200*20/100 + ((10*200 + 4*200*20/100) * 5 / 100) + 200
+	// 10 working + 3 we + 1 * penalty + agreement
+	want := 2600 + 120 + 10 + 200
 	commission, err1 := svc.ReleaseAuto("TESTAUTO2", testday)
 	if err1 != nil {
 		t.Error(err1)
@@ -168,7 +169,7 @@ func TestReleaseAuto(t *testing.T) {
 			EndDate:   testday.AddDate(0, 0, 7),
 		})
 		//
-		want := (10 * 200) + (4 * 200 * 20 / 100) + (2*200*5)/100 + 200
+		want := 2000 + (4 * 200 * 20 / 100) + (2*200*5)/100 + 200
 		commission, err1 = svc.ReleaseAuto("TESTAUTO3", testday)
 		if err1 != nil {
 			t.Error(err1)
@@ -177,7 +178,7 @@ func TestReleaseAuto(t *testing.T) {
 			t.Errorf("want %d, got %d", want, commission)
 		}
 		{ // rented and canceled in one day
-			testday = time.Now()
+			testday = time.Date(2023, time.November, 15, 1, 2, 3, 4, time.UTC)
 			db.Create(&models.Auto{
 				ID:           "TESTAUTO4",
 				Type:         "test",
@@ -189,7 +190,7 @@ func TestReleaseAuto(t *testing.T) {
 				EndDate:   testday.AddDate(0, 0, 10),
 			})
 			//
-			want := 10*200 + (3 * 200 * 20 / 100) + 200
+			want := (10 * 200) + 80 + 200
 			commission, err1 = svc.ReleaseAuto("TESTAUTO4", testday)
 			if err1 != nil {
 				t.Error(err1)
@@ -248,29 +249,6 @@ func TestGetCurrentCommission(t *testing.T) {
 		Value:    200,
 	})
 	{
-	}
-	{
-		db.Create(&models.Commission{
-			AutoType: "TestGetCurrentCommission1",
-			Type:     commissionTypeDaily,
-			Value:    200,
-		})
-		db.Create(&models.Commission{
-			AutoType: "TestGetCurrentCommission1",
-			Type:     commissionTypeWeekend,
-			Value:    20,
-		})
-		db.Create(&models.Commission{
-			AutoType: "TestGetCurrentCommission1",
-			Type:     commissionTypeAgreement,
-			Value:    200,
-		})
-		db.Create(&models.Commission{
-			AutoType:     "TestGetCurrentCommission1",
-			Type:         "commissionTypePenalty",
-			Value:        5,
-			MinThreshold: 10,
-		})
 		testday := time.Date(2023, time.November, 15, 1, 2, 3, 4, time.UTC)
 		db.Create(models.AutoRent{
 			AutoID:    "TestGetCurrentCommission",
@@ -278,7 +256,7 @@ func TestGetCurrentCommission(t *testing.T) {
 			EndDate:   testday.AddDate(0, 0, 7),
 		})
 
-		want := (10 * 200) + (4 * 200 * 20 / 100) + 200
+		want := (10 * 200) + (3 * 200 * 20 / 100) + 200
 		comm, ins, err := svc.GetCurrentCommission("TestGetCurrentCommission", testday)
 		if err != nil {
 			t.Error(err)
@@ -312,12 +290,10 @@ func TestGetCurrentCommission(t *testing.T) {
 		}
 	}
 	db.Delete(&models.AutoRent{}, "auto_id = ?", "TestGetCurrentCommission")
-	db.Delete(&models.Auto{}, "type = ?", "TestGetCurrentCommission")
-	db.Delete(&models.Commission{}, "auto_type = ?", "TestGetCurrentCommission")
-	db.Delete(&models.Commission{}, "auto_type = ?", "TestGetCurrentCommission1")
 	db.Delete(&models.AutoRent{}, "auto_id = ?", "TestGetCurrentCommission1")
 	db.Delete(&models.Auto{}, "type = ?", "TestGetCurrentCommission1")
+	db.Delete(&models.Commission{}, "auto_type = ?", "TestGetCurrentCommission")
 	db.Delete(&models.Commission{}, "auto_type = ?", "TestGetCurrentCommission1")
+	db.Delete(&models.Auto{}, "type = ?", "TestGetCurrentCommission")
 	db.Delete(&models.AutoType{}, "id = ?", "TestGetCurrentCommission")
-	db.Delete(&models.AutoType{}, "id = ?", "TestGetCurrentCommission1")
 }

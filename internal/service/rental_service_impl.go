@@ -133,18 +133,41 @@ func calculateCommissions(
 	rent models.AutoRent, commissions []models.Commission, releaseDate time.Time, checkout bool) (
 	totalCommission int, insuranceCommission int) {
 	releaseDate = releaseDate.Round(0)
-	newD1 := rent.StartDate.Truncate(time.Hour * 24)
-	newD2 := releaseDate.Truncate(time.Hour * 24)
-	completeDays := int(math.Ceil(newD2.Sub(newD1).Hours() / 24))
-	if completeDays < 0 {
-		completeDays = -completeDays
+	total := 0
+	weekendComm := 0
+	dailyCommission, weekendCommission,
+		insuranceCommission, agreementCommission, penaltyPercentCommission := getCommissions(commissions)
+	if checkout && penaltyPercentCommission.Value != 0 && penaltyPercentCommission.MinThreshold != 0 {
+		return calculateCheckouts(
+			rent, releaseDate, dailyCommission, weekendCommission, agreementCommission, insuranceCommission, penaltyPercentCommission)
+	} else {
+		// get current commission, same as checkout without commission
+		newD1 := rent.StartDate.Truncate(time.Hour * 24)
+		newD2 := releaseDate.Truncate(time.Hour * 24)
+		complete := int(math.Ceil(newD2.Sub(newD1).Hours()/24)) + 1
+		// first day always counts as full day
+		if !checkout && complete == 0 {
+			complete = 1
+		}
+		_, weekEnd := calculateWeekends(rent.StartDate, complete)
+		if dailyCommission != 0 {
+			daily := calculateDailyCommission(complete, dailyCommission)
+			total += daily
+		}
+		if weekendCommission != 0 {
+			weekendComm = calculateWeekendCommission(weekEnd, dailyCommission, weekendCommission)
+			total += weekendComm
+		}
+		return total + agreementCommission, insuranceCommission
 	}
-	totalCost := 0
-	dailyCommission := 0
-	agreementCommission := 0
-	weekendCommission := 0
-	penaltyPercentCommission := models.Commission{}
-	insuranceCommission = 0
+}
+
+func getCommissions(commissions []models.Commission) (
+	dailyCommission,
+	weekendCommission,
+	insuranceCommission,
+	agreementCommission int,
+	penaltyPercentCommission models.Commission) {
 	for _, commission := range commissions {
 		if commission.Type == commissionTypeDaily {
 			dailyCommission = commission.Value
@@ -162,100 +185,93 @@ func calculateCommissions(
 			insuranceCommission = commission.Value
 		}
 	}
-
-	if penaltyPercentCommission.Value != 0 && weekendCommission != 0 && dailyCommission != 0 && checkout {
-		totalCost += calculatePenaltyCommissionWithWeekends(
-			releaseDate, rent.StartDate, rent.EndDate, completeDays,
-			penaltyPercentCommission, dailyCommission, weekendCommission)
-		return totalCost + agreementCommission, insuranceCommission
-	}
-	// Currently used only for current balance calculations
-	if weekendCommission != 0 && dailyCommission != 0 {
-		if completeDays == 1 {
-			oneDayCommission := handleOneDayCase(
-				releaseDate.AddDate(0, 0, +1),
-				dailyCommission, weekendCommission, agreementCommission)
-			return oneDayCommission, insuranceCommission
-		}
-		totalDaily := calculateWithWeekendCommission(
-			rent.StartDate.AddDate(0, 0, -1), completeDays+1,
-			weekendCommission, dailyCommission)
-		totalCost += totalDaily
-		return totalCost + agreementCommission, insuranceCommission
-	}
-	if dailyCommission != 0 {
-		totalCost += completeDays + 1*dailyCommission
-		return totalCost + agreementCommission, insuranceCommission
-	}
-
-	return totalCost, insuranceCommission
+	return dailyCommission, weekendCommission, insuranceCommission, agreementCommission, penaltyPercentCommission
 }
 
-func handleOneDayCase(checkDate time.Time,
-	dailyCommission int, weekendCommission int, agreement int) int {
-	if checkDate.Weekday() == time.Saturday || checkDate.Weekday() == time.Sunday {
-		return 1*dailyCommission + 1*dailyCommission*weekendCommission/100 + agreement
-	} else {
-		return 1*dailyCommission + agreement
-	}
-}
-
-func calculatePenaltyCommissionWithWeekends(
+func calculateCheckouts(
+	rent models.AutoRent,
 	releaseDate time.Time,
-	startDate time.Time,
-	endDate time.Time,
-	completeDays int,
-	penaltyCommission models.Commission,
-	dailyCommission int,
-	weekendCommission int) int {
-	checkout := 0
-	minDays := penaltyCommission.MinThreshold
-	daysLeft := int(endDate.Sub(releaseDate).Hours()/24) + 1
-	// If min days threshold is not reached
-	if completeDays+1 < penaltyCommission.MinThreshold {
-		left := int(endDate.Sub(startDate.AddDate(0, 0, minDays)).Hours() / 24)
-		checkout += calculateWithWeekendCommission(
-			startDate, minDays, weekendCommission, dailyCommission)
-		penaltyForUnusedDays := calculateWithWeekendCommission(
-			startDate.AddDate(0, 0, minDays+1), left, weekendCommission, dailyCommission)
-		checkout += (penaltyForUnusedDays * penaltyCommission.Value) / 100
-	} else if dailyCommission != 0 {
-		checkout += calculateWithWeekendCommission(
-			startDate, completeDays+1, weekendCommission, dailyCommission)
-		unusedDays := calculateWithWeekendCommission(
-			releaseDate.AddDate(0, 0, 1),
-			daysLeft, weekendCommission, dailyCommission)
-		penalty := (unusedDays * penaltyCommission.Value) / 100
-		checkout += penalty
+	dailyCommission,
+	weekendCommission,
+	agreementCommission,
+	insuranceCommission int,
+	penaltyPercentCommission models.Commission) (int, int) {
+	daily := 0
+	total := 0
+	rent.EndDate = rent.EndDate.AddDate(0, 0, 1)
+	if penaltyPercentCommission.MinThreshold != 0 {
+		complete, left := calculateDays(
+			rent.StartDate, rent.EndDate,
+			releaseDate, penaltyPercentCommission.MinThreshold)
+		_, weekEnd := calculateWeekends(rent.StartDate, complete)
+		if dailyCommission != 0 {
+			daily = calculateDailyCommission(complete, dailyCommission)
+			total += daily
+		}
+		if weekendCommission != 0 {
+			weekendComm := calculateWeekendCommission(weekEnd, dailyCommission, weekendCommission)
+			total += weekendComm
+		}
+		if left == 0 {
+			return total + agreementCommission, insuranceCommission
+		} else {
+			t := rent.StartDate.AddDate(0, 0, penaltyPercentCommission.MinThreshold-1)
+			t = t.AddDate(0, 0, 2)
+			penaltyCostBeforeCommission := 0
+			_, weekEnd = calculateWeekends(t, left)
+			penaltyCostBeforeCommission += calculateDailyCommission(left, dailyCommission)
+			penaltyCostBeforeCommission += calculateWeekendCommission(weekEnd, dailyCommission, weekendCommission)
+			finPenalty := calculatePenaltyCommission(
+				penaltyCostBeforeCommission, penaltyPercentCommission.Value)
+			return total + finPenalty + agreementCommission, insuranceCommission
+		}
 	}
-	return checkout
+	return 0, 0
 }
 
-// calculate businessday and weekend cost separately
-func calculateWithWeekendCommission(startDate time.Time, completeDays int,
-	weekendCommission int, dailyCommission int) int {
-	if completeDays == 0 {
-		return 0
+func calculateDays(startDate time.Time, endDate time.Time, releaseDate time.Time, threshold int) (completeDays int, daysLeft int) {
+	completeDays = 0
+	left := 0
+	newD1 := startDate.Truncate(time.Hour * 24)
+	newD2 := releaseDate.Truncate(time.Hour * 24)
+	completeDays = int(math.Ceil(newD2.Sub(newD1).Hours()/24)) + 1
+	if completeDays < threshold {
+		completeDays = threshold
+		releaseDate = startDate.AddDate(0, 0, threshold)
+		newD1 = releaseDate.Truncate(time.Hour * 24)
+		newD2 = endDate.Truncate(time.Hour * 24)
+		daysLeft = int(endDate.Sub(releaseDate).Hours() / 24)
+		left = int(endDate.Sub(startDate.AddDate(0, 0, completeDays)).Hours() / 24)
+		return completeDays, left - 1
 	}
-	businessDaysComplete := getWeekdaysBetween(
-		startDate, startDate.AddDate(0, 0, completeDays))
-	weekendDaysComplete := completeDays - businessDaysComplete
-	standardCost := weekendDaysComplete * dailyCommission
-	actualWeekendCommission := (standardCost * weekendCommission) / 100
-	weekendCost := standardCost + actualWeekendCommission
-	businessDayCostDaily := businessDaysComplete * dailyCommission
-	return businessDayCostDaily + weekendCost
+	newD1 = releaseDate.Truncate(time.Hour * 24)
+	newD2 = endDate.Truncate(time.Hour * 24)
+	daysLeft = int(newD2.Sub(newD1).Hours() / 24)
+	return completeDays, daysLeft - 1
 }
 
-func getWeekdaysBetween(t, f time.Time) int {
-	days := 0
-	for {
-		if t.Equal(f) {
-			return days
+func calculateWeekends(startDate time.Time, numDays int) (workDay, weekendDays int) {
+	workDay = 0
+	weekendDays = 0
+	for i := 0; i < numDays; i++ {
+		if startDate.Weekday() == time.Saturday || startDate.Weekday() == time.Sunday {
+			weekendDays++
+		} else {
+			workDay++
 		}
-		if t.Weekday() != time.Saturday && t.Weekday() != time.Sunday {
-			days++
-		}
-		t = t.Add(time.Hour * 24)
+		startDate = startDate.AddDate(0, 0, 1)
 	}
+	return workDay, weekendDays
+}
+
+func calculateDailyCommission(completeDays int, dailyCommission int) int {
+	return completeDays * dailyCommission
+}
+
+func calculateWeekendCommission(completeDays int, dailyCommission int, weekendCommission int) int {
+	return completeDays * dailyCommission * weekendCommission / 100
+}
+
+func calculatePenaltyCommission(total int, percent int) int {
+	return total * percent / 100
 }
